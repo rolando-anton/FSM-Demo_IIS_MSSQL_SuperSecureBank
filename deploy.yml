@@ -1,0 +1,94 @@
+---
+- name: Prepare Windows with IIS and MSSQL with sample database
+  hosts: all
+  tasks:
+    - name: Change the hostname to sample-hostname
+      win_hostname:
+        name: iis-mssql
+      register: res
+
+    - name: Reboot
+      win_reboot:
+      when: res.reboot_required
+
+    - name: Install IIS Web-Server with sub features and management tools
+      win_feature:
+        name: Web-Server,web-asp-Net,Web-Http-Logging
+        state: present
+        include_sub_features: yes
+        include_management_tools: yes
+      register: win_feature
+
+    - name: Reboot if installing Web-Server feature requires it
+      win_reboot:
+      when: win_feature.reboot_required
+
+    - name: Install MSSQL 2014 Express and Tools
+      win_chocolatey:
+        name:
+         - mssqlserver2014express
+         - msdeploy
+        state: present
+
+    - name: Download DB Backup
+      win_get_url:
+        url: 'https://raw.githubusercontent.com/rolando-anton/Demos_Files/master/SuperSecureBank/SecurityInnovation-SuperSecureBank-938fde3/SQL/aio.sql'
+        dest: 'C:\Windows\Temp\aio.sql'
+        validate_certs: no
+
+    - name: Restore Database and Create User
+      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\aio.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
+
+    - name: Remove Default Web Site
+      win_iis_website:
+        name: "Default Web Site"
+        state: absent
+
+    - name: Download Site Backup
+      win_get_url:
+        url: 'https://github.com/rolando-anton/SuperSecureBank/raw/master/site.zip'
+        dest: 'C:\Windows\Temp\site.zip'
+        validate_certs: no
+
+    - name: Unzip Site Backup
+      win_unzip:
+        src: 'C:\Windows\Temp\site.zip'
+        dest: 'C:\Windows\Temp\'
+
+    - name: Creating Application Pool in IIS
+      win_iis_webapppool:
+        name: SuperSecureBankPool
+        state: started
+        attributes:
+          managedRuntimeVersion: v4.0
+          managedPipelineMode: Integrated
+          processModel.identityType: SpecificUser
+          processModel.userName: {{ win-username }}
+          processModel.password: {{ win-password }}
+          processModel.loadUserProfile: true
+
+    - name: Configure IIS Site
+      win_iis_website:
+        name: SuperSecureBank
+        state: started
+        port: 80
+        application_pool: SuperSecureBankPool
+        physical_path: C:\inetpub\wwwroot
+        register: website
+
+    - name: Deploy SuperSecureBank Web Application
+      win_shell: |
+        $msdeploypath = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\IIS Extensions\MSDeploy\*" | select -ExpandProperty InstallPath
+        $msdeployexe = "msdeploy.exe"
+        $msdeploy = $msdeploypath + $msdeployexe
+        $msdeployArgs = @(
+        "-verb:sync",
+        "-source:package=C:\Windows\Temp\site\SuperSecureBank.zip",
+        "-dest:auto,includeAcls='False'",
+        "-disableLink:AppPoolExtension",
+        "-disableLink:ContentExtension",
+        "-disableLink:CertificateExtension",
+        "-setParamFile:C:\Windows\Temp\site\SuperSecureBank.SetParameters.xml"
+        "-verbose"
+        )
+        Start-Process $msdeploy -NoNewWindow -ArgumentList $msdeployArgs
