@@ -28,16 +28,70 @@
         name:
          - mssqlserver2014express
          - msdeploy
+         - git.install
         state: present
 
-    - name: Download DB Backup
-      win_get_url:
-        url: 'https://raw.githubusercontent.com/rolando-anton/Demos_Files/master/SuperSecureBank/SecurityInnovation-SuperSecureBank-938fde3/SQL/aio.sql'
-        dest: 'C:\Windows\Temp\aio.sql'
-        validate_certs: no
+    - name: cloning git repo
+      raw: git clone "https://github.com/rolando-anton/FSM-Demo_IIS_MSSQL_SuperSecureBank/" "C:\Windows\Temp\"
 
-    - name: Restore Database and Create User
-      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\aio.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
+    - name: Restore SuperSecureBank Database
+      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\aio.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
+
+    - name: Create Read Only DB Monitoring User
+      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\new-ro-user.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
+
+    - name: Executing MSSQL Auditing Scripts #1
+      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\PH_LogonEventsTrigger.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
+
+    - name: Executing MSSQL Auditing Scripts #2
+      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\PH_EventDB_Tables_Create.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
+
+    - name: Executing MSSQL Auditing Scripts #3
+      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\PH_Database_Level_Events.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
+
+
+    - name: Executing MSSQL Auditing Scripts #4
+      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\PH_DDL_Server_Level_Events.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
+
+    - name: Enabling MSSQL TCP port 1433
+      win_shell: |
+        import-module sqlps;
+        $MachineObject = new-object ('Microsoft.SqlServer.Management.Smo.WMI.ManagedComputer') $env:computername
+        $instance = $MachineObject.getSmoObject("ManagedComputer[@Name='$env:computername']/" + "ServerInstance[@Name='SQLEXPRESS']")
+        $instance.ServerProtocols['Tcp'].IPAddresses['IPAll'].IPAddressProperties['TcpPort'].Value = "1433"
+        $instance.ServerProtocols['Tcp'].IPAddresses['IPAll'].IPAddressProperties['TcpDynamicPorts'].Value = ""
+        $instance.ServerProtocols['Tcp'].IsEnabled = $true;
+        $instance.ServerProtocols['Tcp'].Alter()
+
+   - name: Enable MSSQL Mixed Mode Authentication
+     win_regedit:
+       path: HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL12.SQLEXPRESS\MSSQLServer
+       name: LoginMode
+       data: 2
+       type: dword
+
+   - name: Enable MSSQL Audit all Logins
+     win_regedit:
+       path: HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL12.SQLEXPRESS\MSSQLServer
+       name: AuditLevel
+       data: 3
+       type: dword
+
+    - name: Restart MSSQL Service
+      win_service:
+        name: MSSQL$SQLEXPRESS
+        state: restarted
+
+
+    - name: Firewall rule to allow SQL Server on TCP port 1433
+      win_firewall_rule:
+        name: SQL Server
+        localport: 1433
+        action: allow
+        direction: in
+        protocol: tcp
+        state: present
+        enabled: yes
 
     - name: Remove Default Web Site
       win_iis_website:
@@ -63,8 +117,8 @@
           managedRuntimeVersion: v4.0
           managedPipelineMode: Integrated
           processModel.identityType: SpecificUser
-          processModel.userName: {{ win-username }}
-          processModel.password: {{ win-password }}
+          processModel.userName: {{ demo-user}}
+          processModel.password: {{ demo-pwd }}
           processModel.loadUserProfile: true
 
     - name: Configure IIS Site
