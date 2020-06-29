@@ -28,30 +28,26 @@
         name:
          - mssqlserver2014express
          - msdeploy
-         - git.install
         state: present
 
+    - name: Fix PowerShell modules installation
+      win_shell: |
+         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+         [Net.ServicePointManager]::SecurityProtocol = "tls12"
+         Install-Module sqlserver -AllowClobber
+
+    - name: Install MSSQL Powershell Module
+      win_psmodule:
+         name: sqlserver
+         allow_clobber: yes
+
     - name: cloning git repo
-      raw: git clone "https://github.com/rolando-anton/FSM-Demo_IIS_MSSQL_SuperSecureBank/" "C:\Windows\Temp\"
+      raw: git clone https://github.com/rolando-anton/FSM-Demo_IIS_MSSQL_SuperSecureBank/ C:\Windows\Temp\SecureBank_Demo
 
     - name: Restore SuperSecureBank Database
       win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\aio.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
-
-    - name: Create Read Only DB Monitoring User
-      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\new-ro-user.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
-
-    - name: Executing MSSQL Auditing Scripts #1
-      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\PH_LogonEventsTrigger.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
-
-    - name: Executing MSSQL Auditing Scripts #2
-      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\PH_EventDB_Tables_Create.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
-
-    - name: Executing MSSQL Auditing Scripts #3
-      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\PH_Database_Level_Events.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
-
-
-    - name: Executing MSSQL Auditing Scripts #4
-      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\PH_DDL_Server_Level_Events.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
 
     - name: Enabling MSSQL TCP port 1433
       win_shell: |
@@ -63,25 +59,27 @@
         $instance.ServerProtocols['Tcp'].IsEnabled = $true;
         $instance.ServerProtocols['Tcp'].Alter()
 
-   - name: Enable MSSQL Mixed Mode Authentication
-     win_regedit:
-       path: HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL12.SQLEXPRESS\MSSQLServer
-       name: LoginMode
-       data: 2
-       type: dword
+    - name: Enable MSSQL Mixed Mode Authentication
+      win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL12.SQLEXPRESS\MSSQLServer
+        name: LoginMode
+        data: 2
+        type: dword
 
-   - name: Enable MSSQL Audit all Logins
-     win_regedit:
-       path: HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL12.SQLEXPRESS\MSSQLServer
-       name: AuditLevel
-       data: 3
-       type: dword
+    - name: Enable MSSQL Audit all Logins
+      win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL12.SQLEXPRESS\MSSQLServer
+        name: AuditLevel
+        data: 3
+        type: dword
+
+    - name: Executing MSSQL Auditing Scripts
+      win_shell: invoke-sqlcmd -inputfile 'C:\Windows\Temp\SecureBank_Demo\PH_Audit_Setup.sql' -serverinstance "IIS-MSSQL\SQLEXPRESS" -database "master"
 
     - name: Restart MSSQL Service
       win_service:
         name: MSSQL$SQLEXPRESS
         state: restarted
-
 
     - name: Firewall rule to allow SQL Server on TCP port 1433
       win_firewall_rule:
@@ -117,8 +115,8 @@
           managedRuntimeVersion: v4.0
           managedPipelineMode: Integrated
           processModel.identityType: SpecificUser
-          processModel.userName: {{ demo-user}}
-          processModel.password: {{ demo-pwd }}
+          processModel.userName: fpocadmin
+          processModel.password: 40Net123#
           processModel.loadUserProfile: true
 
     - name: Configure IIS Site
